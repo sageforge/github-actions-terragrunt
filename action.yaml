@@ -1,0 +1,110 @@
+name: Terragrunt provisioner
+description: |
+  deploy terragrunt environemnts with terraform & terragrunt with formatted plan posted as color coded comments on a PR
+author: sageforge.io
+inputs:
+  action_type:
+    description: "Terrform action to be taken allowed values are ( plan, apply )"
+    required: true
+  target_environment:
+    description: "The name of the target environment under environment-stack dir"
+    required: true
+  environment_stack_dir:
+    description: "The path from base directory of the repo to the target_environemnt directory"
+    required: false
+    default: "environment-stack"
+  post_results:
+    description: "Weather or not to post plan results of plan to Pull requests"
+    required: false
+    default: "true"
+
+
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v2
+    - name: 'Apply ${{ inputs.target_environment }}'
+      if: |
+        always() &&
+        inputs.action_type == 'apply' 
+      shell: bash
+      working-directory: '${{ inputs.environment_stack_dir }}/${{ inputs.target_environment }}'
+      run: "terragrunt run-all apply --terragrunt-non-interactive --terragrunt-include-external-dependencies -compact-warnings"
+      id: apply
+    - name: 'Plan ${{ inputs.target_environment }}'
+      if: |
+        always() &&
+        inputs.action_type == 'plan' 
+      shell: bash
+      working-directory: '${{ inputs.environment_stack_dir }}/${{ inputs.target_environment }}'
+      run: |
+        set +e # don't stop on error
+        startTfMatch="Terraform will perform the following actions:"
+        endTfMatch="Plan:"
+        divider="─────────────────────────────────────────────────────────────────────────────"
+        terragrunt run-all plan --terragrunt-non-interactive --terragrunt-include-external-dependencies -compact-warnings -no-color > plan 2>&1
+        planExitCode=$?
+        cat plan | sed -n -e "/${startTfMatch}/,/${endTfMatch}/p" | sed -e "/${startTfMatch}/i${divider}" | sed -e "\$a${divider}"  | sed -r 's/^([[:blank:]]*)([-+~])/\2\1/g' > plan-short
+        cat plan
+        exit ${planExitCode}
+      id: plan
+    - name: Check for previous comment
+      if: |
+        always() &&
+        inputs.post_results == 'true' &&
+        inputs.action_type == 'plan'
+      uses: peter-evans/find-comment@v2
+      id: fc
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: "Environment: `${{ inputs.target_environment }}`"
+    - name: Update Pull Request
+      if: |
+        always() &&
+        inputs.post_results == 'true' &&
+        inputs.action_type == 'plan'
+      uses: actions/github-script@v6.3.3
+      with:
+        script: |
+          const fs = require('fs');
+          const shouldNotPost = fs.readFileSync("${{ inputs.environment_stack_dir }}/${{ inputs.target_environment }}/plan-short").toString().trim() === ''
+          const plan = ("${{ steps.plan.outcome }}" === "success") ? fs.readFileSync("${{ inputs.environment_stack_dir }}/${{ inputs.target_environment }}/plan-short") : fs.readFileSync("${{ inputs.environment_stack_dir }}/${{ inputs.target_environment }}/plan");
+          let output = `Plan results for **\'${{ inputs.target_environment }}\'** environment:
+          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+          <details><summary>Show terraform output</summary>
+
+          \`\`\`diff
+          ${plan}
+          \`\`\`
+
+          </details>
+
+          *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Environment: \`${{ inputs.target_environment }}\`*`;
+
+          const commentExists = ("${{ steps.fc.outputs.comment-id }}" !== "") ? true : false;
+
+          if (commentExists) {
+            let commentId = "${{ steps.fc.outputs.comment-id }}";
+            commentId = parseInt(commentId);
+            output += "\n\n♻️ This comment has been updated with latest results.";
+            github.rest.issues.updateComment({
+              comment_id: commentId,
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+          } else {
+            if (shouldNotPost) {
+              return
+            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+          }
