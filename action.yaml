@@ -1,7 +1,7 @@
-name: Terragrunt provisioner
+name: Polyform provisioner
 description: |
-  deploy terragrunt environemnts with terraform & terragrunt with formatted plan posted as color coded comments on a PR
-author: sageforge.io
+  deploy polyform environemnts with terraform & terragrunt with formatted plan posted as color coded comments on a PR
+author: polyform-io
 inputs:
   action_type:
     description: "Terrform action to be taken allowed values are ( plan, apply )"
